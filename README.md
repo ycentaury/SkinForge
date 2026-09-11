@@ -5,7 +5,7 @@ An enigma2 skin is natively just a flat XML file: no includes, no macros, no rel
 
 Modern enigma2 distributions add some more advanced features like includes, templates, panels. But those only provide limited support for hierachical design with reusable building blocks. As those skin elements are rendered directly on the box on the fly, those shortcomings were probably required due to limited box processing power.
 
-SkinForge doesn't change what enigma2 itself understands — it compiles a richer source down to the plain, flat XML enigma2 actually loads. That flat XML is also, in principle, a valid source in its own right (hand-write it directly, bypassing SkinForge); on top of it there are three ways to author a richer source (from low to high abstraction level):
+SkinForge doesn't change what enigma2 itself understands — it compiles a richer source down to the plain, flat XML enigma2 actually loads.
 
 0. **XML** — the original flat XML language enigma2 itself understands; nothing to compile since it already is the target format.
 1. **XML+** — the enhanced hierarchical XML dialect (includes, variables, relative positioning, compile-time color/formula checking) compiled end-to-end to XML with `xmlcompile`.
@@ -13,6 +13,16 @@ SkinForge doesn't change what enigma2 itself understands — it compiles a riche
 3. **ZAML** (Zenith Advanced Markup Language) — an optional thin layer on top of YAML that adds a `for` loop, for the common case of a screen repeating the same block N times with an index (see [ZAML: Loops on top of YAML](#zaml-zenith-advanced-markup-language-loops-on-top-of-yaml)). Its source expands to plain YAML before anything else runs, compiled end-to-end with `zmlcompile`.
 
 The latter three (XML+, YAML, ZAML) share the same compiler and the same `Common` directory of reusable building blocks (buttons, title bars, colors, ...) — ZAML expands to YAML, which is simply converted to XML+, then compiled the same way.
+
+```mermaid
+flowchart TD
+    ZML[".zml / .zmlinc<br/>ZAML source"] -->|zml2ymldomain| YML
+    YML[".yml / .ymlinc<br/>YAML source"] -->|yml2xmldomain| XMLP
+    HAND["hand-written XML+"] -.-> XMLP
+    XMLP[".xml / .xmlinc<br/>XML+ source"] -->|"xmlprettydomain, then xmlinc"| FLAT
+    COMMON[("Common/<br/>shared building blocks")] -.->|resolved by xmlinc| FLAT
+    FLAT["flat XML<br/>compiled, unformatted"] -->|xmlpretty| FINAL(["skin.xml<br/>what enigma2 loads"])
+```
 
 ## ZAML & YAML skin example
 
@@ -157,16 +167,6 @@ zmlcompile <domain> [srcbase] [dstbase] [cmnbase]
 
 Use this regardless of which of the three dialects a given plugin's skin is actually written in. `zmlcompile` expands any ZAML source down to YAML, then hands off to `ymlcompile` for the YAML→XML+ step, which itself always runs the same `xmlinc`/`xmlpretty` compile `xmlcompile` alone would. A stage with nothing to do for a particular plugin (no `.zml`/`.zmlinc` source, or no `.yml`/`.ymlinc` source) is simply a no-op, so `zmlcompile` works unmodified on a plugin that's plain XML+ end to end, or plain YAML with no ZAML `for` loops — there's no need to pick a narrower command based on which dialect happens to be in use.
 
-```mermaid
-flowchart TD
-    ZML[".zml / .zmlinc<br/>ZAML source"] -->|zml2ymldomain| YML
-    YML[".yml / .ymlinc<br/>YAML source"] -->|yml2xmldomain| XMLP
-    HAND["hand-written XML+"] -.-> XMLP
-    XMLP[".xml / .xmlinc<br/>XML+ source"] -->|"xmlprettydomain, then xmlinc"| FLAT
-    COMMON[("Common/<br/>shared building blocks")] -.->|resolved by xmlinc| FLAT
-    FLAT["flat XML<br/>compiled, unformatted"] -->|xmlpretty| FINAL(["skin.xml<br/>what enigma2 loads"])
-```
-
 Each dialect can also be entered directly instead of falling through from a higher one — hand-write XML+ and skip straight to `xmlprettydomain`/`xmlinc` (`xmlcompile`), or author YAML with no `for` loops and skip the ZAML step (`ymlcompile`).
 
 `<domain>` is the plugin's directory name. The base-path arguments are optional and independently default to `$HOME/git/dev`, `$HOME/git/rel`, and `$HOME/git/Common` — pass them to build against a different checkout (e.g. a worktree) without touching `$HOME/git`. `srcbase` roots the plugin's own source, `dstbase` the destination tree, and `cmnbase` the shared `Common` tree.
@@ -239,6 +239,7 @@ cell:
 - **The empty-text border trick is recognized and hidden**: a `MultiContentEntryText(text="", border_width=..., border_color=...)` spanning the cell (the common way to draw a cell's frame) is pulled out of `fields:` entirely into `cell.border` and `cell.width`.
 - **`cell.fonts` is the source template's `"fonts"` list, kept verbatim, same order, same positions** — not deduplicated or renumbered, and never dropped, even for an entry no `font=N` anywhere in the template currently points to. `font=N` is a positional reference something outside this one `<convert>` block may rely on, so round-tripping must never renumber or delete a slot just because nothing here currently uses it. A plain two-arg `gFont(family, size)` entry renders as the same `"Family;Size"` string every `font:` reference elsewhere uses (as above); anything else (e.g. `parseFont(...)`) falls back to the verbose `{call, args}` form, still inside `fonts:`.
 - **`cell.vars` covers `TemplatedMultiContentEx`'s local-variable feature** — some plugins declare a `"var": (name := expr, ...)` tuple of walrus-bound values ahead of `"template"` and reference them throughout its `pos=`/`size=` expressions (grid math shared across several rows/columns, computed once). Preserved as an ordered list of the exact binding text, since order matters (a later binding can reference an earlier one by name) and the right-hand side is an arbitrary Python expression, not typed data. Each entry accepts either `name := expr` or the more natural-looking `name = expr` — always compiled back out as `:=`, the only valid syntax inside the `"var": (...)` tuple literal itself:
+
   ```yaml
   cell:
     vars:
@@ -325,16 +326,20 @@ Same signature as `ymlcompile` (see [Quick start](#quick-start)). It expands any
   ```xml
   <widget ... source="title" .../>
   ```
+
 - **Relative positioning** — a `position="x,y"` attribute on an `<xmlinc>` tag is added to every widget position inside that include, recursively through nested includes. A shared `buttons.xmlinc` block of four pixmaps at `0,0` / `300,0` / `600,0` / `900,0` becomes a single reusable "button bar" you place anywhere just by choosing where to `<xmlinc>` it:
 
   ```xml
   <xmlinc file="buttons" position="100,200"/>
   ```
+ 
   places the first button at `100,200`, the second at `400,200`, and so on.
 - **An include's own size is exposed back to its parent** — every `<xmlinc>` sets `$child_width`/`$child_height` to the bounding box (furthest right/bottom edge) of the content it just pulled in, measured in that file's own local 0,0-based coordinates, once its content is fully processed but *before* its own `position=` is resolved — so the include can reference its own just-measured size to place itself, with nothing hand-computed or hardcoded:
+
   ```xml
   <xmlinc file="screenpart_PRSPluginBody.xmlinc" position="eval(($screen_width-$child_width)/2),150"/>
   ```
+
   centers that include horizontally, whatever width its content actually adds up to. The name is fixed, not per-file, so each `<xmlinc>` overwrites it — only reliable for the include that was *just* processed (this one, on its own `position=`, or the very next thing after it), not an earlier sibling.
 - **Global variables** — `<global name="x" value="y"/>` defines `$x`; `<screen size="w,h" .../>` implicitly defines `$screen_width`/`$screen_height` for the whole file. `$vars` don't need to be their own token — `picon$index` substitutes just the `$index` part, so variables can be embedded in literals.
 - **Colors, checked at compile time** — any `...Color="name"` attribute is validated against colors declared via `<color name="x" value="y"/>` (normally collected from a shared `screenpart_colors.xmlinc`) plus a small built-in list of names the device's own base skin already defines (`black`, `white`, `background`, ...). An unknown color name — almost always a typo — fails loudly at compile time instead of silently rendering wrong on the box:
@@ -344,9 +349,11 @@ Same signature as `ymlcompile` (see [Quick start](#quick-start)). It expands any
 - **Per-tag defaults** — `<default tag="widget" zPosition="1" transparent="1" .../>` (normally collected from a shared `screenpart_defaults.xmlinc`, the same way colors are) fills in any attribute a `widget` element doesn't set itself; an attribute the element *does* set always wins. This is for a uniform look across plugins — change a value in one shared file instead of on every widget in every screen. `tag` can optionally be narrowed to one `render` variant, e.g. `<default tag="widget[render=Label]" font="$FB_medium"/>` only fills widgets whose own `render="Label"` — since a plain `tag="widget"` block otherwise applies to every widget regardless of what it renders (Label, Pixmap, ProgressBar, ...). A render-specific block and a plain `tag="widget"` block can coexist: for a given attribute, the render-specific one wins if it sets that attribute, the plain one fills anything still unset, and the element's own attributes always win over both. Defaults are matched by tag name (plus optional `render`) only — no per-screen targeting — and, like colors, only take effect once the file declaring them has actually been reached via an `<xmlinc>` include — conventionally near the top of `skin.yml`/`skin.xml`, alongside `screenpart_colors`/`screenpart_fonts`. A `<default>` element itself never appears in the compiled output.
 - **Formula evaluation** — `eval(...)` runs the enclosed expression as real arithmetic, so positions and sizes can be computed instead of hand-calculated: `eval(($width-100)/2)` centers a 100px-wide element. Division is automatically treated as integer (floor) division since pixel coordinates can't be fractional; if a formula still produces a float (e.g. from a scaling ratio) the result is rounded to the nearest pixel rather than truncated.
 - **Font/size sanity check** — every widget with both a `font` and a `size` is checked against a minimum-line-height heuristic; a `size` too short for its `font` produces a warning identifying the screen, widget, font variable, and both values, catching text that would otherwise render clipped on the actual device:
+
   ```
   WARNING: screen=MyScreen screen_h=1080 widget=title font=$FB_medium size: 30 < font: 37.33333333333333
   ```
+
 - **Verbatim passthrough** — an include named `applet_*` is inlined as raw text without any of the above processing, for embedding pre-rendered or foreign XML snippets unchanged.
 
 ### Usage
@@ -354,6 +361,7 @@ Same signature as `ymlcompile` (see [Quick start](#quick-start)). It expands any
 ```
 xmlinc <source-file> <destination-file> <destination-dir> <common-dir>
 ```
+
 - `source-file` — the hierarchical skin source (e.g. `skin.xml`, or a screen's own `.xml`)
 - `destination-file` — where the fully-resolved, flat XML is written
 - `destination-dir` — the directory `xmlinc` treats as the plugin's own skin directory when searching for includes
@@ -376,6 +384,7 @@ Everything below operates on already-flat XML (or SVG) and doesn't involve the `
 
 ## Installation
 No package available yet, just clone the repo:
+
 ```
 git clone git@github.com:xcentaurix/SkinForge.git
 ```
